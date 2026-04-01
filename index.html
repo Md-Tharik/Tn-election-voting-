@@ -5,272 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Tamil Nadu CM Vote 2026</title>
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getDatabase, ref, runTransaction, onValue, get, set } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
-    import { getAuth, RecaptchaVerifier, signInWithPhoneNumber, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-
-    // ─── REPLACE WITH YOUR FIREBASE CONFIG ───────────────────────────────────
-    
-    const firebaseConfig = {
-  apiKey: "AIzaSyCWjCjepcK_AtIwlwN9N9REiNoNyr8IinA",
-  authDomain: "tn-voting-aca55.firebaseapp.com",
-  databaseURL: "https://tn-voting-aca55-default-rtdb.firebaseio.com", // ✅ ADDED — required for Realtime DB
-  projectId: "tn-voting-aca55",
-  storageBucket: "tn-voting-aca55.firebasestorage.app",
-  messagingSenderId: "867862711872",
-  appId: "1:867862711872:web:2cf9f588a5eb50c0f299a5",
-  measurementId: "G-LXF8RLF2GF"
-};
-    // ─────────────────────────────────────────────────────────────────────────
-
-    const app = initializeApp(firebaseConfig);
-    const db  = getDatabase(app);
-    const auth = getAuth(app);
-
-    const CANDIDATES = ["candidate1","candidate2","candidate3","candidate4"];
-    let currentUser = null;
-    let confirmationResult = null;
-
-    // ── Auth State Listener ───────────────────────────────────────────────────
-    onValue(ref(db, "votes"), snap => { /* Handled below in Live results */ });
-
-    onAuthStateChanged(auth, (user) => {
-      const authBtn = document.getElementById("auth-nav-btn");
-      if (user) {
-        currentUser = user;
-        authBtn.textContent = "Log Out";
-        authBtn.onclick = () => signOut(auth);
-        checkUserVote(user.uid);
-      } else {
-        currentUser = null;
-        authBtn.textContent = "Login to Vote";
-        authBtn.onclick = openAuthModal;
-        unlockAllCards();
-      }
-    });
-
-    // ── Check Database for existing vote ──────────────────────────────────────
-    function checkUserVote(uid) {
-      const userRef = ref(db, `users/${uid}/voted`);
-      onValue(userRef, (snap) => {
-        const votedFor = snap.val();
-        if (votedFor) {
-          lockAllCards(votedFor);
-        } else {
-          unlockAllCards();
-        }
-      });
-    }
-
-    // ── Phone Auth Logic ──────────────────────────────────────────────────────
-    // reCAPTCHA is initialized ONCE on page load into a body-level container.
-    // It must never be inside a modal — mobile browsers won't render it there.
-    function initRecaptcha() {
-      if (window.recaptchaVerifier) return;
-      try {
-        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-          size: 'invisible',   // invisible is fine at body level — no modal interference
-          callback: () => {},
-          'expired-callback': () => {}
-        });
-        window.recaptchaVerifier.render().then(widgetId => {
-          window._recaptchaWidgetId = widgetId;
-        }).catch(err => console.error("reCAPTCHA render:", err));
-      } catch(err) {
-        console.error("reCAPTCHA init:", err);
-      }
-    }
-
-    // Init on page load — container is in body, always visible to browser
-    window.addEventListener('DOMContentLoaded', () => setTimeout(initRecaptcha, 500));
-
-    window.openAuthModal = function() {
-      document.getElementById("auth-modal").classList.add("show");
-    };
-
-    window.closeAuthModal = function() {
-      document.getElementById("auth-modal").classList.remove("show");
-      document.getElementById("phone-number").style.display = 'block';
-      document.getElementById("send-otp-btn").style.display = 'block';
-      document.getElementById("send-otp-btn").disabled = false;
-      document.getElementById("send-otp-btn").style.opacity = '1';
-      document.getElementById("send-otp-btn").textContent = "Send OTP";
-      document.getElementById("otp-code").style.display = 'none';
-      document.getElementById("verify-otp-btn").style.display = 'none';
-    };
-
-    window.sendOTP = function() {
-      let phone = document.getElementById("phone-number").value.trim();
-
-      // Auto-add +91 if user typed 10 digits without country code
-      if (/^\d{10}$/.test(phone)) phone = "+91" + phone;
-
-      if (!/^\+\d{10,15}$/.test(phone)) {
-        showToast("Enter a valid number e.g. +91 9876543210", "warn");
-        return;
-      }
-
-      if (!window.recaptchaVerifier) {
-        showToast("Please wait, verifier loading. Try again.", "warn");
-        initRecaptcha();
-        return;
-      }
-
-      const btn = document.getElementById("send-otp-btn");
-      btn.disabled = true;
-      btn.textContent = "Sending…";
-
-      // Safety timeout — if Firebase doesn't respond in 20s, unblock the UI
-      const timeout = setTimeout(() => {
-        btn.disabled = false;
-        btn.textContent = "Send OTP";
-        showToast("Request timed out. Check your internet & try again.", "error");
-      }, 20000);
-
-      signInWithPhoneNumber(auth, phone, window.recaptchaVerifier)
-        .then((result) => {
-          clearTimeout(timeout);
-          confirmationResult = result;
-          document.getElementById("phone-number").style.display = 'none';
-          document.getElementById("send-otp-btn").style.display = 'none';
-          document.getElementById("otp-code").style.display = 'block';
-          document.getElementById("verify-otp-btn").style.display = 'block';
-          showToast("✅ OTP sent to " + phone, "success");
-        })
-        .catch((error) => {
-          clearTimeout(timeout);
-          showToast("❌ " + (error.message || "Failed to send OTP"), "error");
-          btn.disabled = false;
-          btn.textContent = "Send OTP";
-          // Reset reCAPTCHA token for next attempt
-          if (window.grecaptcha && window._recaptchaWidgetId !== undefined) {
-            window.grecaptcha.reset(window._recaptchaWidgetId);
-          }
-        });
-    };
-
-    window.verifyOTP = function() {
-      const code = document.getElementById("otp-code").value.trim();
-      if (!code) return;
-
-      document.getElementById("verify-otp-btn").disabled = true;
-      document.getElementById("verify-otp-btn").textContent = "Verifying...";
-
-      confirmationResult.confirm(code).then((result) => {
-        closeAuthModal();
-        showToast("Logged in successfully!", "success");
-      }).catch((error) => {
-        showToast("Invalid OTP. Try again.", "error");
-        document.getElementById("verify-otp-btn").disabled = false;
-        document.getElementById("verify-otp-btn").textContent = "Verify OTP";
-      });
-    };
-
-    // ── Initialize missing nodes ──────────────────────────────────────────────
-    CANDIDATES.forEach(id => {
-      const r = ref(db, `votes/${id}`);
-      onValue(r, snap => {
-        if (snap.val() === null) runTransaction(r, () => 0);
-      }, { onlyOnce: true });
-    });
-
-    // ── Cast vote ─────────────────────────────────────────────────────────────
-    window.castVote = async function(candidateId) {
-      if (!currentUser) {
-        showToast("Please login to cast your vote.", "warn");
-        openAuthModal();
-        return;
-      }
-
-      const btn = document.querySelector(`[data-id="${candidateId}"] .vote-btn`);
-      btn.disabled = true;
-      btn.textContent = "Submitting…";
-
-      const userRef = ref(db, `users/${currentUser.uid}/voted`);
-      
-      try {
-        const snapshot = await get(userRef);
-        if (snapshot.exists()) {
-          showToast("You have already cast your vote!", "warn");
-          lockAllCards(snapshot.val());
-          return;
-        }
-
-        // 1. Record the user's vote
-        await set(userRef, candidateId);
-        
-        // 2. Increment candidate vote count
-        await runTransaction(ref(db, `votes/${candidateId}`), current => (current || 0) + 1);
-        
-        lockAllCards(candidateId);
-        showToast("✅ Your vote has been recorded!", "success");
-
-      } catch (err) {
-        console.error(err);
-        btn.disabled = false;
-        btn.textContent = "Cast Vote";
-        showToast("Error processing vote. Please try again.", "error");
-      }
-    };
-
-    // ── Live results listener ─────────────────────────────────────────────────
-    onValue(ref(db, "votes"), snap => {
-      const data = snap.val() || {};
-      const counts = {};
-      let total = 0;
-      CANDIDATES.forEach(id => { counts[id] = data[id] || 0; total += counts[id]; });
-      CANDIDATES.forEach(id => {
-        const pct = total > 0 ? Math.round((counts[id] / total) * 100) : 0;
-        const el  = document.getElementById(`count-${id}`);
-        const bar = document.getElementById(`bar-${id}`);
-        const pctEl= document.getElementById(`pct-${id}`);
-        if (el)    el.textContent  = counts[id].toLocaleString();
-        if (bar)   bar.style.width = pct + "%";
-        if (pctEl) pctEl.textContent = pct + "%";
-      });
-      const totalEl = document.getElementById("total-votes");
-      if (totalEl) totalEl.textContent = total.toLocaleString();
-
-      // crown the leader
-      const leader = CANDIDATES.reduce((a,b) => counts[a] >= counts[b] ? a : b);
-      document.querySelectorAll(".candidate-card").forEach(c => c.classList.remove("leader"));
-      if (total > 0) document.querySelector(`[data-id="${leader}"]`)?.classList.add("leader");
-    });
-
-    // ── UI Helpers ────────────────────────────────────────────────────────────
-    window.lockAllCards = function(votedId) {
-      document.querySelectorAll(".candidate-card").forEach(card => {
-        const id  = card.dataset.id;
-        const btn = card.querySelector(".vote-btn");
-        if (id === votedId) {
-          btn.textContent = "✔ Voted";
-          btn.classList.add("voted");
-        } else {
-          btn.textContent = "Locked";
-          btn.classList.remove("voted");
-        }
-        btn.disabled = true;
-      });
-    }
-
-    window.unlockAllCards = function() {
-      document.querySelectorAll(".candidate-card").forEach(card => {
-        const btn = card.querySelector(".vote-btn");
-        btn.textContent = "Cast Vote";
-        btn.classList.remove("voted");
-        btn.disabled = false;
-      });
-    }
-
-    function showToast(msg, type) {
-      const t = document.getElementById("toast");
-      t.textContent = msg;
-      t.className = "toast show " + type;
-      setTimeout(() => t.className = "toast", 3000);
-    }
-  </script>
-
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 
@@ -396,42 +130,6 @@
     .vote-btn:disabled { opacity: .5; cursor: not-allowed; }
     .vote-btn.voted { background: linear-gradient(135deg, var(--green-tn), #27ae60); color: #fff; border-color: transparent; opacity: 1; }
 
-    /* ── Auth Modal ──────────────────────────────────────────────────────── */
-    .modal-overlay {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(5px);
-      z-index: 1000; display: none; align-items: center; justify-content: center; opacity: 0;
-      transition: opacity 0.3s;
-    }
-    .modal-overlay.show { display: flex; opacity: 1; }
-    
-    .modal-content {
-      background: var(--dark-2); padding: 2.5rem 2rem; border-radius: var(--radius-lg);
-      border: 1px solid var(--border); width: 90%; max-width: 400px; text-align: center;
-      box-shadow: 0 24px 64px rgba(0,0,0,.5), 0 0 0 1px var(--gold);
-    }
-    
-    .modal-content h3 { font-family: var(--ff-display); font-size: 2rem; color: var(--gold-light); margin-bottom: 0.5rem; }
-    .modal-content p { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
-    
-    .modal-input {
-      width: 100%; padding: 0.9rem; margin-bottom: 1rem; background: var(--dark-3);
-      border: 1px solid rgba(255,255,255,0.1); color: var(--text); border-radius: var(--radius);
-      font-family: var(--ff-body); font-size: 1rem; text-align: center; letter-spacing: 0.05em;
-    }
-    .modal-input:focus { outline: none; border-color: var(--gold); }
-    
-    .modal-btn {
-      width: 100%; padding: 0.9rem; background: linear-gradient(135deg, var(--gold), var(--saffron));
-      color: #0c0c10; font-family: var(--ff-body); font-size: 0.95rem; font-weight: 700;
-      border: none; border-radius: var(--radius); cursor: pointer; transition: transform 0.2s; margin-bottom: 0.8rem;
-    }
-    .modal-btn:hover:not(:disabled) { transform: translateY(-2px); }
-    .modal-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .modal-btn-cancel { background: transparent; color: var(--muted); border: 1px solid var(--muted); }
-    .modal-btn-cancel:hover { background: rgba(255,255,255,0.05); color: var(--text); border-color: var(--text); }
-    
-    #recaptcha-container { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); z-index: 9998; }
-
     /* ── Live Results Panel ──────────────────────────────────────────────── */
     .results-section { background: var(--dark-2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
     .results-inner { max-width: 800px; margin: 0 auto; }
@@ -476,8 +174,6 @@
     .nav-brand span { color: var(--muted); font-size: .85em; }
     
     .nav-actions { display: flex; align-items: center; gap: 1.5rem; }
-    .auth-nav-btn { background: transparent; border: 1px solid var(--gold); color: var(--gold-light); padding: 0.4rem 1rem; border-radius: var(--radius); font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
-    .auth-nav-btn:hover { background: rgba(200,146,42,0.1); }
 
     .disclaimer { background: rgba(255,111,0,.07); border: 1px solid rgba(255,111,0,.2); border-radius: var(--radius); padding: 1rem 1.4rem; font-size: .8rem; color: #ffa94d; margin-bottom: 3rem; display: flex; gap: .7rem; align-items: flex-start; }
     .disclaimer svg { flex-shrink: 0; margin-top: 1px; }
@@ -507,8 +203,7 @@
   <nav>
     <div class="nav-brand">TN Chief Minister Poll <span>2026</span></div>
     <div class="nav-actions">
-      <div class="live-dot"><span>Live Results</span></div>
-      <button class="auth-nav-btn" id="auth-nav-btn">Loading...</button>
+      <div id="conn-status" class="live-dot" style="color: #8a8795;"><span>Checking Server...</span></div>
     </div>
   </nav>
 
@@ -524,12 +219,12 @@
         Who Will Lead<br/><span>Tamil Nadu</span><br/>in 2026?
       </h1>
       <p class="hero-sub fade-up delay-2">
-        Cast your vote securely using SMS authentication. Watch the results update in real-time. One vote per verified phone number.
+        Cast your vote securely. Watch the results update in real-time. One vote per device.
       </p>
       <div class="hero-stats fade-up delay-3">
         <div class="stat-pill">🗳 Total Votes <strong id="total-votes">0</strong></div>
         <div class="stat-pill">⏱ Live Since 2025</div>
-        <div class="stat-pill">🔒 Verified via OTP</div>
+        <div class="stat-pill">🔒 1 Vote Per Device</div>
       </div>
     </div>
 
@@ -544,13 +239,13 @@
   <section class="section">
     <div class="section-label">Cast Your Vote</div>
     <h2 class="section-title">The Candidates</h2>
-    <p class="section-desc">Select your preferred Chief Ministerial candidate. Log in with your phone number to securely cast your single vote.</p>
+    <p class="section-desc">Select your preferred Chief Ministerial candidate. Cast your vote securely to make your voice heard.</p>
 
     <div class="disclaimer">
       <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>
       </svg>
-      This is an unofficial public opinion poll. Phone numbers are securely handled by Firebase Auth and are not stored in plaintext or sold.
+      This is an unofficial public opinion poll. Voting is restricted to one vote per device using local storage.
     </div>
 
     <div class="candidates-grid">
@@ -570,7 +265,7 @@
             </div>
             <div class="vote-bar-track"><div class="vote-bar-fill r1" id="bar-candidate1"></div></div>
           </div>
-          <button class="vote-btn" onclick="castVote('candidate1')">Cast Vote</button>
+          <button class="vote-btn">Cast Vote</button>
         </div>
       </div>
 
@@ -590,7 +285,7 @@
             </div>
             <div class="vote-bar-track"><div class="vote-bar-fill r2" id="bar-candidate2"></div></div>
           </div>
-          <button class="vote-btn" onclick="castVote('candidate2')">Cast Vote</button>
+          <button class="vote-btn">Cast Vote</button>
         </div>
       </div>
 
@@ -610,7 +305,7 @@
             </div>
             <div class="vote-bar-track"><div class="vote-bar-fill r3" id="bar-candidate3"></div></div>
           </div>
-          <button class="vote-btn" onclick="castVote('candidate3')">Cast Vote</button>
+          <button class="vote-btn">Cast Vote</button>
         </div>
       </div>
 
@@ -630,7 +325,7 @@
             </div>
             <div class="vote-bar-track"><div class="vote-bar-fill r4" id="bar-candidate4"></div></div>
           </div>
-          <button class="vote-btn" onclick="castVote('candidate4')">Cast Vote</button>
+          <button class="vote-btn">Cast Vote</button>
         </div>
       </div>
     </div>
@@ -667,23 +362,6 @@
       </div>
     </div>
   </section>
-
-  <div class="modal-overlay" id="auth-modal">
-    <div class="modal-content">
-      <h3>Verify Identity</h3>
-      <p>Log in with your phone number to vote securely.</p>
-
-      <input type="tel" id="phone-number" class="modal-input" placeholder="+91 9876543210" />
-
-
-      <button id="send-otp-btn" class="modal-btn" onclick="sendOTP()">Send OTP</button>
-
-      <input type="text" id="otp-code" class="modal-input" placeholder="Enter 6-digit OTP" style="display:none;" inputmode="numeric" maxlength="6" />
-      <button id="verify-otp-btn" class="modal-btn" onclick="verifyOTP()" style="display:none;">Verify OTP</button>
-      
-      <button class="modal-btn modal-btn-cancel" onclick="closeAuthModal()">Cancel</button>
-    </div>
-  </div>
 
   <footer>
     <div class="footer-logo">TN CM Poll 2026</div>
@@ -740,8 +418,129 @@
     if (tv) obs.observe(tv, { childList:true, characterData:true, subtree:true });
   </script>
 
-<!-- reCAPTCHA must live at body level, never inside a modal -->
-  <div id="recaptcha-container" style="position:fixed;bottom:0;left:50%;transform:translateX(-50%);z-index:9998;"></div>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 
+  <script>
+    // New TN-ELECTION3 Configuration with Singapore Region URL
+    const firebaseConfig = {
+      apiKey: "AIzaSyBpkUuK57Qn2r5fSMoPZJ-qoB2OIc1HAhI",
+      authDomain: "tn-election3.firebaseapp.com",
+      databaseURL: "https://tn-election3-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "tn-election3",
+      storageBucket: "tn-election3.firebasestorage.app",
+      messagingSenderId: "612087702866",
+      appId: "1:612087702866:web:a0749359122c1bc4bec68b",
+      measurementId: "G-64YDY7YEJG"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    
+    const CANDIDATES = ["candidate1","candidate2","candidate3","candidate4"];
+    const LS_KEY = "tn_cm_vote_2026";
+
+    // ── Connection Monitor ──────────────────────────────────────────
+    const connectedRef = db.ref(".info/connected");
+    const connStatusEl = document.getElementById("conn-status");
+
+    connectedRef.on("value", (snap) => {
+      if (snap.val() === true) {
+        console.log("Connected to tn-election3 Database.");
+        connStatusEl.style.color = "#2ecc71";
+        connStatusEl.innerHTML = "<span>● Live Connection</span>";
+      } else {
+        console.warn("Disconnected from Database.");
+        connStatusEl.style.color = "#e74c3c";
+        connStatusEl.innerHTML = "<span>○ Reconnecting...</span>";
+      }
+    });
+
+    function lockAllCards(votedId) {
+      document.querySelectorAll(".candidate-card").forEach(card => {
+        const id  = card.dataset.id;
+        const btn = card.querySelector(".vote-btn");
+        btn.textContent = id === votedId ? "✔ Voted" : "Locked";
+        if (id === votedId) btn.classList.add("voted");
+        else btn.classList.remove("voted");
+        btn.disabled = true;
+      });
+    }
+
+    function showToast(msg, type) {
+      const t = document.getElementById("toast");
+      t.textContent = msg;
+      t.className = "toast show " + type;
+      setTimeout(() => t.className = "toast", 3000);
+    }
+
+    // ── Fixed Cast Vote Logic ─────────────────────────────────────────
+    function castVote(candidateId) {
+      const voted = localStorage.getItem(LS_KEY);
+
+      if (voted) {
+        showToast("You have already cast your vote!", "warn");
+        return;
+      }
+
+      const btn = document.querySelector(`[data-id="${candidateId}"] .vote-btn`);
+      btn.disabled = true;
+      btn.textContent = "Submitting…";
+
+      // Transaction is most stable for counting
+      db.ref('votes').child(candidateId).transaction((currentValue) => {
+        return (currentValue || 0) + 1;
+      }, (error, committed) => {
+        if (error) {
+          console.error("Vote failed:", error);
+          btn.disabled = false;
+          btn.textContent = "Cast Vote";
+          showToast("Failed: " + error.message, "error");
+        } else if (committed) {
+          localStorage.setItem(LS_KEY, candidateId);
+          lockAllCards(candidateId);
+          showToast("✅ Vote recorded!", "success");
+        }
+      });
+    }
+
+    // Attach events
+    const prevVote = localStorage.getItem(LS_KEY);
+    if (prevVote) lockAllCards(prevVote);
+
+    document.querySelectorAll('.candidate-card').forEach(card => {
+      const btn = card.querySelector('.vote-btn');
+      if (!btn.disabled) {
+        btn.addEventListener('click', () => castVote(card.dataset.id));
+      }
+    });
+
+    // Live results Sync
+    db.ref('votes').on('value', snap => {
+      const data = snap.val() || {};
+      let total = 0;
+      CANDIDATES.forEach(id => { total += (data[id] || 0); });
+      
+      CANDIDATES.forEach(id => {
+        const count = data[id] || 0;
+        const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+        
+        const el = document.getElementById(`count-${id}`);
+        const bar = document.getElementById(`bar-${id}`);
+        const pctEl = document.getElementById(`pct-${id}`);
+        
+        if (el) el.textContent = count.toLocaleString();
+        if (bar) bar.style.width = pct + "%";
+        if (pctEl) pctEl.textContent = pct + "%";
+      });
+      
+      const totalEl = document.getElementById("total-votes");
+      if (totalEl) totalEl.textContent = total.toLocaleString();
+
+      const leader = CANDIDATES.reduce((a, b) => (data[a] || 0) >= (data[b] || 0) ? a : b);
+      document.querySelectorAll(".candidate-card").forEach(c => c.classList.remove("leader"));
+      if (total > 0) document.querySelector(`[data-id="${leader}"]`)?.classList.add("leader");
+    });
+  </script>
 </body>
 </html>
